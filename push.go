@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/coder/websocket"
@@ -28,7 +28,7 @@ func (g *Gateway) subscribePush(ctx context.Context) {
 	sub := g.rdb.Subscribe(ctx, pushChannel)
 	defer sub.Close()
 
-	log.Printf("abonniert: %s", pushChannel)
+	slog.Info("abonniert", "kanal", pushChannel)
 
 	ch := sub.Channel()
 	for {
@@ -37,7 +37,9 @@ func (g *Gateway) subscribePush(ctx context.Context) {
 			return
 		case redisMsg, ok := <-ch:
 			if !ok {
-				log.Println("redis-abo beendet")
+				// Error, weil der Dienst danach weiterläuft, aber keine
+				// Pushes mehr zustellt – Strecke C wäre still tot.
+				slog.Error("redis-abo beendet")
 				return
 			}
 			g.fanout(ctx, []byte(redisMsg.Payload))
@@ -49,13 +51,13 @@ func (g *Gateway) subscribePush(ctx context.Context) {
 func (g *Gateway) fanout(ctx context.Context, envelope []byte) {
 	var env pushEnvelope
 	if err := json.Unmarshal(envelope, &env); err != nil {
-		log.Printf("push verworfen: ungültiger umschlag: %v", err)
+		slog.Error("push verworfen: ungültiger umschlag", "err", err)
 		return
 	}
 
 	if env.ProtocolVersion != protocolVersion {
-		log.Printf("push verworfen: protocol_version=%d (erwartet %d)",
-			env.ProtocolVersion, protocolVersion)
+		slog.Error("push verworfen: falsche protocol_version",
+			"bekommen", env.ProtocolVersion, "erwartet", protocolVersion)
 		return
 	}
 
@@ -65,7 +67,7 @@ func (g *Gateway) fanout(ctx context.Context, envelope []byte) {
 			err := conn.Write(wctx, websocket.MessageText, env.Payload)
 			cancel()
 			if err != nil {
-				log.Printf("push fehlgeschlagen user=%d: %v", userID, err)
+				slog.Warn("push fehlgeschlagen", "user", userID, "err", err)
 			}
 		}
 	}

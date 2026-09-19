@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -126,6 +127,13 @@ func LoadConfig() (*Config, error) {
 	if cfg.RedisURL == "" {
 		problems = append(problems, "REDIS_URL fehlt")
 	}
+
+	// Ohne http:// startet der Dienst sauber, /healthz sagt ok – und erst
+	// Strecke B stirbt mit "unsupported protocol scheme" (2026-09-18 passiert).
+	if u, err := url.Parse(cfg.BackendURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		problems = append(problems, fmt.Sprintf("BACKEND_URL %q braucht http:// oder https:// und einen Host", cfg.BackendURL))
+	}
+
 	// Nur HS256. Ein anderes Verfahren braucht eine andere Prüflogik; still
 	// weiterlaufen hieße, Tokens falsch zu validieren.
 	if cfg.Algorithm != "HS256" {

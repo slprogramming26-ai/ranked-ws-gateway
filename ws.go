@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/coder/websocket"
@@ -22,21 +22,21 @@ type Gateway struct {
 func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Vor dem Upgrade: ein abgelehnter Versuch soll billig bleiben.
 	if !g.ips.allow(clientIP(r)) {
-		log.Print("verbindung abgelehnt: ratelimit")
+		slog.Warn("verbindung abgelehnt: ratelimit")
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
 
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
-		log.Printf("accept fehlgeschlagen: %v", err)
+		slog.Warn("accept fehlgeschlagen", "err", err)
 		return
 	}
 	defer conn.CloseNow()
 
 	userID, err := userIDFromToken(r.URL.Query().Get("token"), g.cfg.SecretKey)
 	if err != nil {
-		log.Printf("token abgelehnt: %v", err)
+		slog.Warn("token abgelehnt", "err", err)
 		conn.Close(websocket.StatusPolicyViolation, "invalid token")
 		return
 	}
@@ -70,12 +70,12 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if err := g.markOnline(ctx, userID); err != nil {
-		log.Printf("presence: anmelden fehlgeschlagen user=%d: %v", userID, err)
+		slog.Error("presence: anmelden fehlgeschlagen", "user", userID, "err", err)
 	}
 
 	go g.heartbeat(ctx, userID, conn)
 
-	log.Printf("verbunden: user=%d", userID)
+	slog.Info("verbunden", "user", userID)
 
 	// Selbstschutz vor dem Parsen: mehr kann eine gültige Nachricht nicht sein.
 	conn.SetReadLimit(64 * 1024)
@@ -87,7 +87,8 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			log.Printf("getrennt: user=%d: %v", userID, err)
+			// Normaler Abgang, deshalb "grund" statt "err".
+			slog.Info("getrennt", "user", userID, "grund", err)
 			return
 		}
 
@@ -98,7 +99,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 			if ctx.Err() != nil {
 				return // Verbindung weg, nicht das Limit
 			}
-			log.Printf("ratelimit user=%d", userID)
+			slog.Warn("ratelimit", "user", userID)
 			if werr := wsjson.Write(ctx, conn, newErrorMessage("rate limit exceeded")); werr != nil {
 				return
 			}
@@ -107,9 +108,9 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		msg, err := parseClientMessage(data)
 		if err != nil {
-			log.Printf("formfehler von user=%d: %v", userID, err)
+			slog.Warn("formfehler", "user", userID, "err", err)
 			if werr := wsjson.Write(ctx, conn, newErrorMessage(err.Error())); werr != nil {
-				log.Printf("antwort fehlgeschlagen user=%d: %v", userID, werr)
+				slog.Warn("antwort fehlgeschlagen", "user", userID, "err", werr)
 				return
 			}
 			continue
@@ -119,9 +120,9 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// Störung, kein Protokoll-Inhalt (§ 5.1). Details bleiben im Log,
 			// der Client bekommt trotzdem eine Antwort (§ 4.4: nie keine).
-			log.Printf("strecke b fehlgeschlagen user=%d kind=%s: %v", userID, msg.Kind, err)
+			slog.Error("strecke b fehlgeschlagen", "user", userID, "kind", msg.Kind, "err", err)
 			if werr := wsjson.Write(ctx, conn, newErrorMessage("backend unavailable")); werr != nil {
-				log.Printf("antwort fehlgeschlagen user=%d: %v", userID, werr)
+				slog.Warn("antwort fehlgeschlagen", "user", userID, "err", werr)
 				return
 			}
 			continue
@@ -129,7 +130,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		// 200 -> Body WÖRTLICH in den Socket. Kein Parsen, kein Umbauen (§ 5.1, § 6).
 		if werr := conn.Write(ctx, websocket.MessageText, raw); werr != nil {
-			log.Printf("antwort fehlgeschlagen user=%d: %v", userID, werr)
+			slog.Warn("antwort fehlgeschlagen", "user", userID, "err", werr)
 			return
 		}
 	}

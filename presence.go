@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/coder/websocket"
@@ -59,7 +59,7 @@ func (g *Gateway) heartbeat(ctx context.Context, userID int, conn *websocket.Con
 			return
 		case <-ticker.C:
 			if err := g.markOnline(ctx, userID); err != nil {
-				log.Printf("presence: erneuern fehlgeschlagen user=%d: %v", userID, err)
+				slog.Error("presence: erneuern fehlgeschlagen", "user", userID, "err", err)
 			}
 
 			// Eigene Frist: sonst hinge der Ping an der Lebensdauer der
@@ -78,7 +78,7 @@ func (g *Gateway) heartbeat(ctx context.Context, userID int, conn *websocket.Con
 				// Keine Antwort: tot, auch wenn TCP das noch nicht weiß.
 				// Das Schließen weckt den Read-Loop, und dessen Aufräum-
 				// Closure erledigt Registry und Presence wie immer.
-				log.Printf("kein pong, trenne user=%d: %v", userID, err)
+				slog.Warn("kein pong, trenne", "user", userID, "err", err)
 				_ = conn.CloseNow()
 				return
 			}
@@ -93,7 +93,7 @@ func (g *Gateway) clearPresence(userID int) {
 	defer cancel()
 
 	if err := g.markOffline(ctx, userID); err != nil {
-		log.Printf("presence: abmelden fehlgeschlagen user=%d: %v", userID, err)
+		slog.Error("presence: abmelden fehlgeschlagen", "user", userID, "err", err)
 	}
 }
 
@@ -109,7 +109,7 @@ func (g *Gateway) restorePresence(userID int) {
 	defer cancel()
 
 	if err := g.markOnline(ctx, userID); err != nil {
-		log.Printf("presence: nachtragen fehlgeschlagen user=%d: %v", userID, err)
+		slog.Error("presence: nachtragen fehlgeschlagen", "user", userID, "err", err)
 	}
 }
 
@@ -131,7 +131,7 @@ func (g *Gateway) clearPresenceAll(userIDs []int) {
 	defer cancel()
 
 	if err := g.rdb.Del(ctx, keys...).Err(); err != nil {
-		log.Printf("presence: sammelabmeldung fehlgeschlagen (%d nutzer): %v", len(keys), err)
+		slog.Error("presence: sammelabmeldung fehlgeschlagen", "nutzer", len(keys), "err", err)
 	}
 }
 

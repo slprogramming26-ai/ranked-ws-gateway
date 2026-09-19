@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,28 +11,41 @@ import (
 	"time"
 )
 
+// fatal ersetzt log.Fatalf: slog kennt kein Fatal. Über log.Fatalf käme die
+// wichtigste Meldung überhaupt nach SetDefault nur als INFO an.
+// Wie log.Fatalf überspringt os.Exit alle defer.
+func fatal(msg string, err error) {
+	slog.Error(msg, "err", err)
+	os.Exit(1)
+}
+
 func main() {
+	// JSON-Zeilen auf stdout: Railway liest "level" und "msg" selbst. Gos log
+	// schreibt nach stderr, und Railway zeigt stderr pauschal als error an.
+	// Leitet nebenbei alles, was noch über das log-Paket kommt (z. B.
+	// net/http), als INFO hierher um.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	cfg, err := LoadConfig()
 	if err != nil {
-		log.Fatalf("Start abgebrochen: %v", err)
+		fatal("Start abgebrochen", err)
 	}
 
-	log.Printf(
-		"ws-gateway startet: instance=%s port=%s backend=%s redis=%s secret=%s ws_secret=%s",
-		cfg.InstanceID,
-		cfg.Port,
-		cfg.BackendURL,
-		mask(cfg.RedisURL),
-		mask(string(cfg.SecretKey)),
-		mask(cfg.WSInternalSecret),
+	slog.Info("ws-gateway startet",
+		"instance", cfg.InstanceID,
+		"port", cfg.Port,
+		"backend", cfg.BackendURL,
+		"redis", mask(cfg.RedisURL),
+		"secret", mask(string(cfg.SecretKey)),
+		"ws_secret", mask(cfg.WSInternalSecret),
 	)
 
 	rdb, err := newRedisClient(cfg.RedisURL)
 	if err != nil {
-		log.Fatalf("Start abgebrochen: %v", err)
+		fatal("Start abgebrochen", err)
 	}
 	defer rdb.Close()
-	log.Println("Redis verbunden")
+	slog.Info("Redis verbunden")
 
 	// Lebt so lange wie der ganze Prozess. Endet er, endet das Redis-Abo.
 	rootCtx, rootCancel := context.WithCancel(context.Background())
@@ -61,11 +74,11 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	log.Printf("höre auf %s", srv.Addr)
+	slog.Info("höre auf", "addr", srv.Addr)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Server gestoppt: %v", err)
+			fatal("Server gestoppt", err)
 		}
 	}()
 
@@ -73,13 +86,13 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
 
-	log.Println("Signal empfangen, fahre herunter ...")
+	slog.Info("Signal empfangen, fahre herunter")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Herunterfahren unsauber: %v", err)
+		slog.Error("Herunterfahren unsauber", "err", err)
 	}
 	// Keine neuen Pushes mehr annehmen.
 	rootCancel()
@@ -88,8 +101,8 @@ func main() {
 	// Also selbst einsammeln, sonst stünden alle bis zu 60 s falsch online.
 	ids, n := gw.reg.closeAll()
 	gw.clearPresenceAll(ids)
-	log.Printf("%d verbindungen geschlossen, %d nutzer abgemeldet", n, len(ids))
+	slog.Info("verbindungen geschlossen, nutzer abgemeldet", "verbindungen", n, "nutzer", len(ids))
 
-	log.Println("beendet")
+	slog.Info("beendet")
 
 }
